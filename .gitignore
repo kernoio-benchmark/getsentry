@@ -101,3 +101,5 @@ agents.lock
 .agents/skills/warden/
 .agents/skills/warden-sweep/
 # end
+.env.agent.*
+ecosystem.agent.*.config.cjs

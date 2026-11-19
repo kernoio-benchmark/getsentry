@@ -1,0 +1,61 @@
+# Shared infrastructure — ONE instance serves all agent slots.
+#
+# Sentry's hard runtime dependencies for the web app are PostgreSQL and Redis.
+# Everything else in devservices/config.yml (snuba + clickhouse + kafka, relay,
+# symbolicator, taskbroker, objectstore, ...) is intentionally NOT run by the
+# harness — see .har/README.md "Skipped full-dev setup".
+#
+# Only services listed in HARNESS_INFRA_SERVICES (harness.env) are started by
+# `har env setup-infra`. Project name: har-sentry.
+services:
+  db:
+    # Sentry targets PostgreSQL 14 (PG_VERSION in src/sentry/conf/server.py).
+    image: postgres:14-alpine
+    restart: always
+    ports:
+      # Host port scanned by HAR (db lane in HARNESS_INFRA_PORT_LANES).
+      - "${AGENT_DB_PORT:-15432}:5432"
+    environment:
+      POSTGRES_PASSWORD: password
+    volumes:
+      - agent-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - max_connections=300
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=1
+      - -c
+      - max_wal_senders=1
+    shm_size: 256m
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      # FIXED host port — HAR only scans its built-in lanes, so redis cannot be
+      # rescanned. Keep in sync with REDIS_PORT in env.template and the
+      # default in scripts/sentry-slot.sh. Slots isolate by logical DB index:
+      #   0 = template migration, 1..N = slot N (devserver),
+      #   32+N = slot N pytest (see pytest/har_sentry_pytest.py).
+      - "16479:6379"
+    command: ["redis-server", "--databases", "64", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  agent-db-data:

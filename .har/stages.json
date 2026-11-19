@@ -1,0 +1,160 @@
+{
+  "version": "1",
+  "artifactsDir": "artifacts",
+  "logsDir": "logs",
+  "agentSlots": {
+    "min": 1,
+    "max": 3
+  },
+  "verificationStages": [
+    "typecheck",
+    "api-health",
+    "ui-health",
+    "lint",
+    "unit-tests",
+    "frontend-checks",
+    "readiness"
+  ],
+  "stages": [
+    {
+      "id": "setup-infra",
+      "kind": "setup",
+      "description": "Shared infrastructure (Docker, template DB)",
+      "artifacts": []
+    },
+    {
+      "id": "launch",
+      "kind": "launch",
+      "description": "Launch an isolated agent environment slot",
+      "artifacts": [
+        {
+          "path": ".env.agent.{agentId}",
+          "kind": "file",
+          "description": "Generated per-agent environment file in the session work dir"
+        }
+      ]
+    },
+    {
+      "id": "verify",
+      "kind": "verify",
+      "description": "Verification pipeline: runs stages.json verificationStages in order (tier \"quick\" by default; --full runs the whole list)",
+      "artifacts": [
+        {
+          "path": ".har/artifacts",
+          "kind": "directory",
+          "description": "Optional verification outputs such as reports, traces, screenshots, and logs"
+        }
+      ],
+      "acceptsArgs": [
+        "--full"
+      ]
+    },
+    {
+      "id": "status",
+      "kind": "inspect",
+      "description": "Inspect a running agent environment slot",
+      "artifacts": [
+        {
+          "path": ".har/logs",
+          "kind": "directory",
+          "description": "Optional harness logs"
+        }
+      ]
+    },
+    {
+      "id": "logs",
+      "kind": "inspect",
+      "description": "Read recent logs for an agent slot",
+      "artifacts": []
+    },
+    {
+      "id": "teardown",
+      "kind": "teardown",
+      "description": "Stop processes and release agent slot resources",
+      "artifacts": []
+    },
+    {
+      "id": "typecheck",
+      "kind": "test",
+      "tier": "quick",
+      "requiresAgentId": true,
+      "artifacts": [],
+      "description": "Backend import/system-check smoke: sentry django check (id kept as 'typecheck' because HAR re-adds a default stage under that name)",
+      "command": "\"${PYTHON_BIN:-.venv/bin/python}\" -m sentry django check"
+    },
+    {
+      "id": "api-health",
+      "kind": "test",
+      "description": "Django /_health/ on API_PORT (primary app process ready)",
+      "script": "stages/api-health.sh",
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "quick"
+    },
+    {
+      "id": "ui-health",
+      "kind": "test",
+      "description": "rsbuild dev server on FE_PORT is up and proxying to Django",
+      "command": "curl -fsS --max-time 10 -o /dev/null \"http://localhost:${FE_PORT}/_health/\"",
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "quick"
+    },
+    {
+      "id": "lint",
+      "kind": "test",
+      "description": "prek (ruff, format, mypy hooks) + pnpm lint:js on files changed in the slot",
+      "script": "stages/lint.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/lint",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "unit-tests",
+      "kind": "test",
+      "tier": "full",
+      "requiresAgentId": true,
+      "description": "pytest for changed/related Python test files with the HAR plugin (Snuba/Kafka-only failures reported as skipped); id kept as 'unit-tests' because HAR re-adds a bare 'pytest -q' stage under that name",
+      "script": "stages/backend-tests.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/backend-tests",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "id": "frontend-checks",
+      "kind": "test",
+      "description": "pnpm typecheck + jest --findRelatedTests when JS/TS changed (skipped otherwise)",
+      "script": "stages/frontend-checks.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/frontend-checks",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "readiness",
+      "kind": "test",
+      "description": "Agent-usable smoke (HARNESS_READINESS_CMD): login as dev admin, org/project API, UI bundle served",
+      "script": "stages/readiness.sh",
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "full"
+    }
+  ],
+  "commitGate": {
+    "enabled": true,
+    "mode": "block",
+    "scope": "worktrees"
+  }
+}

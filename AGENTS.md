@@ -132,3 +132,64 @@ Frontend (`static/`) and backend (`src/`, `tests/`) are **not atomically deploye
 - If your changes touch both frontend and backend, split them into **separate PRs**.
 - Land the backend PR first when the frontend depends on new API changes.
 - Pure test additions alongside `src/` changes are fine in one PR.
+
+<!-- har:agent-environment:start -->
+## HAR / agent environment
+
+This repository uses a `.har/` harness. It is **how you run and verify this
+project** — launch a slot for live apps, browsers and screenshots; never
+hand-roll docker or dev-server startup. If a harness command fails, fix the
+harness or report it; do not fall back to ad-hoc commands.
+
+1. **Launch first** — `har_launch_environment` / `har env launch <id>`. Make ALL
+   edits under the returned **work dir**, never the main checkout. Bind tracker
+   work with `--work-id` / `--work-url` when the task names an issue.
+2. **Verify before done** — `har_run_verification` (`full: true`) /
+   `har env verify <id> --full`. Commit in the session worktree.
+3. **Stop at handoff** — report summary, session branch and preview URLs, then
+   wait. Never autonomously `complete`, `teardown`, push, or open a PR.
+4. **All slots taken?** Occupied slots always block a launch, and you never free
+   one yourself. Run `har env status`, then show the user every slot — branch,
+   work unit, what it achieves, last verify, and whether its commits are merged,
+   pushed or unpushed — and recommend which to close: merged or abandoned work
+   with nothing left to do first; never one with unpushed commits. On approval:
+   `complete` / `teardown <id>`, then launch.
+
+Customize the harness only through `harness.env`, `stages.json` + `.har/stages/`,
+`.har/hooks/` and `.har/plugins/` — there is no generated `.har/*.sh` entry-point
+surface.
+
+Full detail — slot environment, readiness, definition of done, project commands,
+commit gate: [`.har/README.md`](.har/README.md) and [`.har/stages.json`](.har/stages.json).
+<!-- har:agent-environment:end -->
+
+### HAR project-specific notes
+
+- **What a slot runs**: the Sentry web app only — Django (`sentry devserver --no-watchers`)
+  on `API_PORT` and the rsbuild dev server on `FE_PORT` (open this one). Shared,
+  once per machine: Postgres 14 (per-slot DB `agent_<id>` cloned from a migrated
+  template) and Redis 7 (per-slot DB index). Get URLs with `har env agent <id> url`.
+- **Login**: `admin@sentry.io` / `admin`, org `sentry`, project `internal`
+  (created by `sentry upgrade` in dev mode; no seed step).
+- **Not available in slots**: Snuba/ClickHouse/Kafka, Relay, taskworkers — Issues,
+  Discover, Explore and event ingestion error out; tasks run eagerly in-process.
+  Don't start devservices yourself; tests needing them are reported as skipped by
+  full verify — call them out in your handoff.
+- **Inside a slot the commands above do NOT apply as written**: they assume
+  devservices on `localhost:5432`/`6379`, which on this machine belong to other
+  projects. Never run bare `.venv/bin/pytest` and never conclude "tests can't run
+  here". Instead:
+  - Backend tests: `har env run-stage <id> unit-tests` (changed/related files), or
+    `HAR_TESTS="<paths or node ids>" har env run-stage <id> unit-tests`.
+  - Everything else (prek, `sentry` commands, pnpm): first
+    `cd <work dir> && set -a && . ./.env.agent.<id> && set +a`, then use
+    `.venv/bin/…` / `"$PYTHON_BIN"` / `pnpm` (Node 26 is linked into `.venv/bin`).
+- **New migration** → apply it to the slot DB (`"$PYTHON_BIN" -m sentry upgrade --noinput`
+  with the slot env loaded), then `har env agent <id> restart`, or the live app 500s.
+- **Backend down / UI 504 after an edit** → the dev server drops its workers on an
+  import error and doesn't respawn them. Check `har env agent <id> logs web`, fix,
+  then `har env agent <id> restart`.
+- **Definition of done**: `har env verify <id> --full` passes (django check, health,
+  changed-file lint, related pytest/jest, typecheck when TS changed, login + API + UI
+  smoke), the change is exercised in the running slot, and frontend/backend changes
+  are split into separate PRs. Handing off without a full verify run is not done.

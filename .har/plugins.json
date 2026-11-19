@@ -1,0 +1,10 @@
+{
+  "version": "1",
+  "profile": "default",
+  "bundles": [
+    "shared-kernel",
+    "pm2-runtime",
+    "runtime-default"
+  ],
+  "plugins": []
+}
