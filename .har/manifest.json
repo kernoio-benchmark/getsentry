@@ -1,12 +1,12 @@
 {
   "version": "1",
-  "runtimeVersion": "1.0.0",
-  "cliVersion": "1.28.0",
   "outputDir": ".har",
   "createdAt": "2026-11-18T12:45:54.831Z",
-  "updatedAt": "2026-11-18T12:45:54.831Z",
+  "updatedAt": "2026-11-20T16:45:06.553Z",
   "adaptationSummary": "Adapted for getsentry/sentry (default profile): per-slot Django (sentry devserver --no-watchers on API_PORT) + rsbuild dev server (FE_PORT) via PM2; shared Postgres 14 (template_sentry migrated with sentry upgrade -> dev admin/org/project) and Redis 7 (fixed port 16479, per-slot DB index); scripts/sentry-slot.sh for install (uv sync + devenv-pinned Node 26 + pnpm install), env-driven SENTRY_CONF, migrate, changed-files and login/API/UI smoke; eager tasks (no Kafka/Snuba); stages: django check, health, UI proxy (quick) + prek/oxlint, related pytest (per-slot test DBs/Redis, snuba-only tests skipped), typecheck + direct jest specs, readiness smoke (full); post-teardown hook drops pytest DBs; agentSlots.max=3.",
   "profile": "default",
+  "runtimeVersion": "1.0.0",
+  "cliVersion": "1.28.0",
   "fileChecksums": {
     ".gitignore": "b7774b6d2997d461",
     "README.md": "9f0f410be3abc25b",

@@ -76,11 +76,11 @@
     {
       "id": "typecheck",
       "kind": "test",
-      "tier": "quick",
-      "requiresAgentId": true,
-      "artifacts": [],
       "description": "Backend import/system-check smoke: sentry django check (id kept as 'typecheck' because HAR re-adds a default stage under that name)",
-      "command": "\"${PYTHON_BIN:-.venv/bin/python}\" -m sentry django check"
+      "command": "\"${PYTHON_BIN:-.venv/bin/python}\" -m sentry django check",
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "quick"
     },
     {
       "id": "api-health",
@@ -117,8 +117,6 @@
     {
       "id": "unit-tests",
       "kind": "test",
-      "tier": "full",
-      "requiresAgentId": true,
       "description": "pytest for changed/related Python test files with the HAR plugin (Snuba tests run against the slot's own test Snuba; Kafka/Symbolicator/Objectstore-only failures reported as skipped); id kept as 'unit-tests' because HAR re-adds a bare 'pytest -q' stage under that name",
       "script": "stages/backend-tests.sh",
       "artifacts": [
@@ -126,7 +124,9 @@
           "path": ".har/artifacts/backend-tests",
           "kind": "directory"
         }
-      ]
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
     },
     {
       "id": "frontend-checks",
@@ -148,6 +148,132 @@
       "description": "Agent-usable smoke (HARNESS_READINESS_CMD): login as dev admin, org/project API, UI bundle served",
       "script": "stages/readiness.sh",
       "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "pr-split",
+      "kind": "test",
+      "description": "Slot change is one deployable PR: does not mix static/ with src/ (AGENTS.md split rule). Tagged by factory lines; NOT on verify",
+      "script": "stages/pr-split.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/pr-split",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-not-permanent",
+      "kind": "test",
+      "description": "flag-cleanup line: HAR_FLAG is not a permanent.py entitlement (warns on default=True) — never on verify",
+      "script": "stages/flag-cleanup-not-permanent.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flag-cleanup-not-permanent",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-reads-backend",
+      "kind": "test",
+      "description": "flag-cleanup line: no read of HAR_FLAG left in src/ or tests/ — never on verify",
+      "script": "stages/flag-cleanup-reads-backend.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flag-cleanup-reads-backend",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-reads-frontend",
+      "kind": "test",
+      "description": "flag-cleanup line: no read of the flag's short name left in static/ — never on verify",
+      "script": "stages/flag-cleanup-reads-frontend.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flag-cleanup-reads-frontend",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-registration-absent",
+      "kind": "test",
+      "description": "flag-cleanup line: HAR_FLAG appears nowhere in the repo — never on verify",
+      "script": "stages/flag-cleanup-registration-absent.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flag-cleanup-registration-absent",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-flag-registered",
+      "kind": "test",
+      "description": "flagged-feature line: HAR_FLAG registered in temporary.py as FlagPole, default off — never on verify",
+      "script": "stages/flagged-feature-flag-registered.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-flag-registered",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-migrations-consistent",
+      "kind": "test",
+      "description": "flagged-feature line: makemigrations --check --dry-run in the slot (CI migration-check) — never on verify",
+      "script": "stages/flagged-feature-migrations-consistent.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-migrations-consistent",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-backend-gated",
+      "kind": "test",
+      "description": "flagged-feature line: src/ reads HAR_FLAG and tests/ enable it — never on verify",
+      "script": "stages/flagged-feature-backend-gated.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-backend-gated",
+          "kind": "directory"
+        }
+      ],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-frontend-gated",
+      "kind": "test",
+      "description": "flagged-feature line: api_expose=True, static/app checks the short name, a spec enables it — never on verify",
+      "script": "stages/flagged-feature-frontend-gated.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-frontend-gated",
+          "kind": "directory"
+        }
+      ],
       "requiresAgentId": true,
       "tier": "full"
     }

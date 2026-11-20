@@ -10,6 +10,7 @@ artifacts/
 state/
 maintain/
 ADAPT-PROMPT.md
+ADAPT-PROMPT-line-*.md
 migrate/
 MIGRATE-PROMPT.md
 AGENTS.md.proposed

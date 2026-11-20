@@ -134,6 +134,7 @@ Frontend (`static/`) and backend (`src/`, `tests/`) are **not atomically deploye
 - Pure test additions alongside `src/` changes are fine in one PR.
 
 <!-- har:agent-environment:start -->
+
 ## HAR / agent environment
 
 This repository uses a `.har/` harness. It is **how you run and verify this
@@ -201,3 +202,10 @@ commit gate: [`.har/README.md`](.har/README.md) and [`.har/stages.json`](.har/st
   changed-file lint, related pytest/jest, typecheck when TS changed, login + API + UI
   smoke), the change is exercised in the running slot, and frontend/backend changes
   are split into separate PRs. Handing off without a full verify run is not done.
+- **Factory lines** (`har line status`): multi-PR programs in `.har/lines/<id>/`.
+  Two are installed: `flag-cleanup` (retire a FlagPole flag) and `flagged-feature`
+  (ship a feature dark behind a flag). When the task is one of those, read the
+  line's `README.md` and work one station per slot. Before handing off a station,
+  run both `har env verify <id> --full` and
+  `HAR_FLAG=organizations:<name> har line gate <station> --line <line> --agent <id>`.
+  Line gates are never part of verify. Never hand off a red gate.
