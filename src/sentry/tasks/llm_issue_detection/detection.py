@@ -12,7 +12,7 @@ from django.db.models import F
 from pydantic import BaseModel, Field
 from urllib3 import BaseHTTPResponse
 
-from sentry import features, options
+from sentry import options
 from sentry.constants import VALID_PLATFORMS, ObjectStatus
 from sentry.issues.grouptype import (
     AIDetectedCodeHealthGroupType,
@@ -29,7 +29,6 @@ from sentry.models.organization import Organization
 from sentry.models.project import Project
 from sentry.net.http import connection_from_url
 from sentry.seer.agent.utils import normalize_description
-from sentry.seer.seer_setup import has_seer_access
 from sentry.seer.signed_seer_api import SeerViewerContext, make_signed_seer_api_request
 from sentry.tasks.base import instrumented_task
 from sentry.taskworker.namespaces import issues_tasks
@@ -249,14 +248,6 @@ def create_issue_occurrence_from_detection(
         occurrence=occurrence,
         event_data=event_data,
     )
-
-
-def _is_org_eligible(org_id: int) -> bool:
-    try:
-        org = Organization.objects.get_from_cache(id=org_id)
-    except Organization.DoesNotExist:
-        return False
-    return features.has("organizations:ai-issue-detection", org) and has_seer_access(org)
 
 
 @instrumented_task(
