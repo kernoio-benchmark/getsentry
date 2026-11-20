@@ -25,13 +25,15 @@ the harness or report it — don't silently fall back to ad-hoc commands.
 | `stages/lint.sh` | Full: `prek run --files <changed>` + `pnpm run lint:js <changed JS/TS>` |
 | `stages/backend-tests.sh` | Full stage `unit-tests`: pytest on changed / related Python test files (or `HAR_TESTS=…`) |
 | `stages/frontend-checks.sh` | Full: `pnpm run typecheck` + jest on direct specs of changed JS/TS (skipped otherwise) |
-| `hooks/post-teardown.sh` | Drops the slot's pytest DBs (`test_*_agent<id>`) so the next session starts fresh |
+| `hooks/post-launch.sh` | Starts the slot's own Snuba for the running app (`sentry-slot.sh snuba-up live`) |
+| `hooks/post-teardown.sh` | Drops the slot's pytest DBs (`test_*_agent<id>`) and removes its Snuba containers + ClickHouse DBs (`snuba-down`) |
 | `stages/readiness.sh` | Full: runs `HARNESS_READINESS_CMD` (agent-usable smoke) |
-| `scripts/sentry-slot.sh` | Sentry helper called by `harness.env` and stages: `install`, `migrate`, `conf`, `changed-files`, `smoke`. Not an entry point. |
-| `pytest/har_sentry_pytest.py` | pytest plugin loaded only by the `unit-tests` stage: Redis → harness Redis (per-slot DB), per-slot test DB names, Snuba/Kafka-only failures → skips |
+| `scripts/sentry-slot.sh` | Sentry helper called by `harness.env`, hooks and stages: `install`, `migrate`, `conf`, `changed-files`, `smoke`, `snuba-up [live\|test]`, `snuba-down`, `snuba-status`. Not an entry point. |
+| `pytest/har_sentry_pytest.py` | pytest plugin loaded only by the `unit-tests` stage: Redis → harness Redis (per-slot DB), per-slot test DB names, Snuba → the slot's test Snuba, Kafka/Symbolicator/Objectstore-only failures → skips |
 | `env.template` | Per-slot env (expanded into `.env.agent.<id>` at launch) |
 | `ecosystem.agent.template.cjs` | PM2 processes for the primary app: `web` (Django) + `ui` (rsbuild) |
-| `docker-compose.agent.yml` | Shared infra: `db` (Postgres 14), `redis` (Redis 7) |
+| `docker-compose.agent.yml` | Shared infra: `db` (Postgres 14), `redis` (Redis 7), `clickhouse` (Snuba's ClickHouse image) |
+| `clickhouse/*.xml` | ClickHouse config, copied from Snuba's devservices config (memory capped at 4 GiB) |
 | `STAGES.md` | Stage registry and script-contract guide |
 | `justfile` | Optional shortcuts (requires `just`) |
 
@@ -71,6 +73,7 @@ only entry points and write identical run records.
 | **Org / project** | `sentry` / `internal` (single-organization mode) |
 | **Postgres** | database `agent_<id>` on `localhost:${PGPORT}` (user `postgres` / `password`) |
 | **Redis** | `localhost:${REDIS_PORT}` DB `${REDIS_DB}` (= agent id) |
+| **Snuba** | `${SNUBA}` = `http://127.0.0.1:1218<id>` — the slot's own Snuba API, ClickHouse database `har_agent<id>` (pytest uses a second one on `1228<id>`) |
 | **Sentry config** | `${SENTRY_CONF}` = `<work dir>/.sentry-har/` (generated, git-excluded) |
 | **Python / Node** | `<work dir>/.venv` (`PYTHON_BIN`); Node v26 (devenv pin) linked into `.venv/bin` |
 | **Work dir** | Fresh worktree per launch — see launch output or `.har/slots/agent-<id>.json` |
@@ -83,22 +86,85 @@ work dir. Python changes auto-reload (Django autoreloader); `static/` changes
 trigger an rsbuild rebuild + full page reload. Use `har env agent <id> restart`
 if a change doesn't take (e.g. new dependency → relaunch).
 
+## How a slot is wired
+
+Each slot has its own app processes **and** its own Snuba; the heavy servers
+(Postgres, Redis, ClickHouse) run once per machine and isolate slots by
+database. Every slot looks the same — `<N>` is the agent id:
+
+```
+ ┌─ slot <N> ─ worktree ~/worktrees/<base>-<sha4>-har-agent-<N>-<rand4> ────────────┐
+ │                                                                                  │
+ │   browser ──► rsbuild `ui`  :70N0 ──proxy──► Django `web`  :75N0                 │
+ │               (PM2)                          (PM2)   │ SNUBA=127.0.0.1:1218N     │
+ │                                                      ▼                           │
+ │                                 Snuba API "live"   har-sentry-snuba-agentN       │
+ │                                                    :1218N   (hooks/post-launch)  │
+ │                                                                                  │
+ │   har env run-stage N unit-tests                                                 │
+ │   pytest + har_sentry_pytest ──► Snuba API "test"  har-sentry-snuba-test-agentN  │
+ │                                                    :1228N   (started on 1st run) │
+ └────────────┬──────────────────────┬──────────────────────────┬───────────────────┘
+              │ Postgres             │ Redis                    │ ClickHouse
+ ═════════════▼══════════════════════▼══════════════════════════▼══ shared, one per machine
+   har-sentry-db-1          har-sentry-redis-1          har-sentry-clickhouse-1
+   :15432 (scanned lane)    :16479 (fixed)              :18123 HTTP (fixed, debug only)
+   ─────────────────        ─────────────────           ─────────────────────────
+   template_sentry          DB 0      template          har_agentN       (live)
+   agent_N       (app)      DB N      app               har_agentN_test  (pytest)
+   test_*_agentN (pytest)   DB 16+N   Snuba live
+                            DB 32+N   pytest
+                            DB 48+N   Snuba test
+```
+
+Why two Snuba instances per slot: every `SnubaTestCase` test first calls
+`reset_snuba`, which drops all data in its Snuba. Giving pytest its own
+instance (own ClickHouse database) means a test run never wipes the running
+app's data, and one slot never wipes another's — every slot clones the same
+template, so they even share org/project ids. This is the same isolation
+Sentry's CI uses for parallel test workers (`XDIST_PER_WORKER_SNUBA`,
+`.github/workflows/scripts/bootstrap-snuba.py`): one ClickHouse server, and per
+consumer its own ClickHouse database, Snuba API container and Snuba Redis DB.
+
+### Lifecycle
+
+```
+ har env setup-infra        once per machine: db, redis, clickhouse (+ template_sentry)
+        │
+ har env launch N           worktree + .venv/node_modules, agent_N cloned & migrated,
+        │                   PM2 web + ui, health check
+        └─ hooks/post-launch.sh ──► snuba-up live    (~25 s: CREATE DATABASE,
+        │                                             snuba bootstrap, snuba api)
+ har env verify N --full
+        └─ unit-tests stage ─────► snuba-up test     (first run only, ~25 s) → pytest
+        │
+ har env teardown|complete N  PM2 stopped, agent_N dropped, worktree removed
+        └─ hooks/post-teardown.sh ► test_*_agentN dropped, snuba-down (both Snuba
+                                    containers removed, both ClickHouse DBs dropped)
+```
+
+Inspect or repair a slot's Snuba (env loaded from `.env.agent.<id>`, or just
+`AGENT_ID=<id>`): `bash .har/scripts/sentry-slot.sh snuba-status` /
+`snuba-up live` (idempotent). Logs: `docker logs har-sentry-snuba-agent<id>`.
+
 ## Primary app vs shared services
 
 | Resource | Model | Configuration |
 |----------|-------|---------------|
 | Sentry web (Django `web` + rsbuild `ui`) | Per slot, PM2 `har-sentry-agent-<id>-{web,ui}` | `ecosystem.agent.template.cjs` |
 | Postgres 14 | One shared container `har-sentry-db-1`; per-slot DB `agent_<id>` cloned from `template_sentry` | `HARNESS_INFRA_SERVICES="db redis"` |
-| Redis 7 | One shared container `har-sentry-redis-1`; per-slot logical DB = agent id (pytest: 32 + id) | same |
-| Snuba / ClickHouse / Kafka / Relay / taskworkers / Symbolicator / … | **Not run** — see below | — |
+| Redis 7 | One shared container `har-sentry-redis-1`; per-slot logical DB = agent id (pytest: 32 + id; Snuba: 16 + id / 48 + id) | same |
+| ClickHouse | One shared container `har-sentry-clickhouse-1`; per-slot databases `har_agent<id>` / `har_agent<id>_test` | `HARNESS_INFRA_SERVICES`, `clickhouse/*.xml` |
+| Snuba API | **Per slot**, two containers: `har-sentry-snuba-agent<id>` (app, `:1218<id>`) and `har-sentry-snuba-test-agent<id>` (pytest, `:1228<id>`); image `ghcr.io/getsentry/snuba:nightly` | `hooks/post-launch.sh`, `scripts/sentry-slot.sh snuba-*` |
+| Kafka / Relay / taskworkers / Symbolicator / objectstore / … | **Not run** — see below | — |
 
 ### Skipped full-dev setup (and the substitutes)
 
-`devservices up` + `sentry devserver` normally also run Snuba (ClickHouse +
-Kafka), Relay, Spotlight, objectstore and, with `--workers`, taskbroker +
-taskworkers + Kafka consumers. That stack is ~15 containers and is shared
-machine-wide by devservices, so the harness deliberately does not run it per
-slot. Substitutes:
+`devservices up` (default mode) runs Postgres, Redis, Snuba (+ ClickHouse,
+Kafka), Relay, Spotlight and objectstore; ingestion and `--workers` add
+taskbroker, taskworkers and Kafka consumers. The harness runs the part that can
+be isolated per slot — Postgres, Redis and Snuba (see "How a slot is wired") —
+and substitutes the rest:
 
 - **Tasks** — `TASKWORKER_ALWAYS_EAGER = True` in the slot config: tasks run
   inline in the request (no Kafka/taskbroker needed; Sentry allows this with
@@ -107,14 +173,22 @@ slot. Substitutes:
   runs Sentry's `post_upgrade` receivers, which create the dev superuser
   `admin@sentry.io` / `admin`, org `sentry`, project `internal`. This happens
   once in `template_sentry`; every slot clones it.
-- **Event data / Snuba-backed pages** — Issues stream, Discover, Explore,
-  Performance, dashboards widgets and event ingestion need Snuba and will show
-  errors in a slot. Settings, members, projects, alerts config, integrations,
-  auth and most API endpoints work. `SNUBA` points at `127.0.0.1:1218`, so if a
-  developer happens to run `devservices up` (default mode), slots use that
-  Snuba read-only-ish (shared, not isolated per slot). Agents must not start it
-  themselves.
-- **Mock data** — `bin/load-mocks` is not run (needs Snuba/Kafka).
+- **Snuba without Kafka** — each slot's Snuba runs only its API (`snuba api`),
+  like CI's per-worker instances; `snuba bootstrap --no-kafka` runs the
+  ClickHouse migrations without a broker. Snuba-backed pages (Issues stream,
+  Discover, Explore, Performance, dashboards) load and query the slot's Snuba —
+  but it stays **empty in the running app**: nothing ingests events into it.
+  Tests are unaffected: `SnubaTestCase.store_event` writes over HTTP
+  (`/tests/entities/<entity>/insert`), not through Kafka.
+- **Event ingestion** — Relay + Kafka + ingest/Snuba consumers are not run, so
+  SDK events sent to a slot are dropped. Isolating them per slot would need
+  per-slot Kafka topics on both the Sentry and Snuba side; use CI or a
+  developer's own `devservices up --mode ingest` for ingestion work.
+- **`requires_kafka` tests** — Sentry checks a hard-coded `127.0.0.1:9092`;
+  the harness does not take that port (it is devservices' Kafka). Reported as
+  `HAR:` skipped (3 markers in the suite).
+- **Mock data** — `bin/load-mocks` / `bin/mock-*` are not run (they ingest
+  through Kafka/Relay).
 - **Assets** — rsbuild dev server per slot, error overlay off and HMR off
   (`rsbuild.config.ts` defaults): rebuilds cause full reloads, compile errors
   go to `har env agent <id> logs ui` instead of covering the page. First load
@@ -147,11 +221,14 @@ pre-commit / selective-test flow:
   `test_{region,control,secondary}_agent<id>`, reused within a session — pass
   `--create-db` by hand after model changes; dropped on teardown) and harness
   Redis (DB 32 + id).
-  Tests that fail only because Snuba/Kafka/Symbolicator/Objectstore are absent
-  (their `requires_*` marker, or a refused Snuba connection during the test —
-  e.g. an endpoint 500 because its Snuba query failed) are reported as
-  **skipped** with a `HAR:` reason — mention them in your handoff; CI will run
-  them. Run a chosen selection the same way:
+  Snuba tests run for real against the slot's **test** Snuba
+  (`har-sentry-snuba-test-agent<id>`, started by the stage on first use — the
+  plugin points Sentry's `xdist.get_snuba_url()` hook at it, as CI does for
+  per-worker Snuba). Tests that fail only because Kafka/Symbolicator/Objectstore
+  are absent (their `requires_*` marker) are reported as **skipped** with a
+  `HAR:` reason — mention them in your handoff; CI will run them. If the test
+  Snuba could not start, the stage warns and Snuba tests are skipped the same
+  way (fix with `sentry-slot.sh snuba-up test`). Run a chosen selection the same way:
   `HAR_TESTS="tests/sentry/foo/test_bar.py::TestX::test_y" har env run-stage <id> unit-tests`.
 - `frontend-checks` — only if JS/TS changed: `pnpm run typecheck` (whole
   project, incremental) and `pnpm test-ci --runTestsByPath` on changed
@@ -174,8 +251,8 @@ Full logs: `.har/artifacts/<stage>/agent-<id>.log` (main checkout).
 
 | Layer | What it means here | Where it's encoded |
 |-------|--------------------|--------------------|
-| Infra ready | `har-sentry-db-1` + `har-sentry-redis-1` up; `template_sentry` migrated with dev admin/org/project | `har env setup-infra` (`HARNESS_DB_MIGRATE_CMD`) |
-| Slot data ready | `agent_<id>` cloned + migrated to the branch's schema; Redis DB `<id>`; `.sentry-har/` config generated | `har env launch` |
+| Infra ready | `har-sentry-db-1` + `har-sentry-redis-1` + `har-sentry-clickhouse-1` up; `template_sentry` migrated with dev admin/org/project | `har env setup-infra` (`HARNESS_DB_MIGRATE_CMD`) |
+| Slot data ready | `agent_<id>` cloned + migrated to the branch's schema; Redis DB `<id>`; `.sentry-har/` config generated; Snuba `har-sentry-snuba-agent<id>` healthy on `har_agent<id>` | `har env launch` + `hooks/post-launch.sh` |
 | Process ready | PM2 `web` + `ui` online; `/_health/` on API_PORT and via FE_PORT | launch health wait, quick verify |
 | Agent usable | Login `admin@sentry.io`/`admin` works, `GET /api/0/organizations/sentry/projects/` lists `internal`, UI login page + its JS bundle served by rsbuild | `readiness` stage (`scripts/sentry-slot.sh smoke`) |
 
@@ -188,7 +265,7 @@ token under *User Settings → Personal Tokens* or use the session cookie.
 - [ ] `har env verify <id> --full` returns `"status": "pass"`
 - [ ] The change works in the running slot (UI and/or API) — not just green tests
 - [ ] New behavior has test coverage (pytest under `tests/`, jest `*.spec.tsx` under `static/`)
-- [ ] Any `HAR:` skipped tests (Snuba/Kafka-dependent) are called out in the handoff
+- [ ] Any `HAR:` skipped tests (Kafka/Symbolicator/Objectstore-dependent) are called out in the handoff
 - [ ] Frontend (`static/`) and backend (`src/`, `tests/`) changes are split into separate PRs (repo rule)
 - [ ] Changes committed **in the session worktree** with a clear message
 - [ ] Handoff: summary, session branch, preview URL (`http://localhost:${FE_PORT}`); then **wait for the user** before `complete`, push or PR
@@ -245,6 +322,9 @@ module) and only respawns them on the *next* Python file change. Read
 | Debug (`DEBUG_PORT`) | Per slot | `9200 + AGENT_ID × STEP` | 9210 | Same (unused by Sentry) |
 | Postgres (`PGPORT`) | Per machine | `db` lane `15432:15432-15499` | 15432 | HAR scans the range; persisted in `.har/state/infra.env` |
 | Redis (`REDIS_PORT`) | Per machine | **fixed** `16479` | 16479 | None — HAR has no redis lane; change `docker-compose.agent.yml`, `env.template` and `scripts/sentry-slot.sh` together |
+| ClickHouse | Per machine | **fixed** `127.0.0.1:18123` (HTTP, debugging only — Snuba uses the `har-sentry_default` network) | 18123 | None — fixed lane like redis |
+| Snuba live (`SNUBA`) | Per slot | `"1218"` + agent id (string, ids 1–9) | 12181 | None — fixed; `snuba-up` fails if busy. Change `env.template` and `snuba_vars` in `scripts/sentry-slot.sh` together |
+| Snuba test | Per slot | `"1228"` + agent id | 12281 | Same |
 
 Bases were chosen to avoid a developer's own `devservices serve` (8000/8001,
 8010 in silo mode), Relay (7899), `pnpm dev-ui` (7999) and HAR Mission Control
@@ -254,7 +334,8 @@ Bases were chosen to avoid a developer's own `devservices serve` (8000/8001,
 
 - Hardcode ports in app code, tests, or docs — read `.env.agent.<id>` / `har env agent <id> url`
 - Run raw `docker compose`, `devservices up`, or `sentry devserver` for the harness — use `har env setup-infra` / `har env launch`
-- Start Snuba/Kafka/workers in your slot — they are intentionally out of scope (see above)
+- Start Kafka/Relay/workers, or a Snuba by hand (`devservices up`, `docker run`) — the slot already has its own Snuba; use `sentry-slot.sh snuba-up` to repair it
+- Point a slot or a test run at another slot's Snuba port, or at the live `1218<id>` from pytest — test resets would wipe that data
 - Touch other slots' databases (`agent_<n>`), Redis DBs, worktrees or PM2 processes
 - Edit `.env.agent.<id>`, `ecosystem.agent.<id>.config.cjs` or `.sentry-har/` by hand — they are regenerated on launch
 - Edit the main checkout — all edits go under the session work dir
@@ -291,6 +372,14 @@ branch of the same name, recorded in `.har/slots/agent-<id>.json`.
   then `har env setup-infra`. Do the same if the **first** template migration
   failed: HAR creates `template_sentry` before migrating and skips existing
   templates on later runs, so a half-migrated template must be dropped first.
+- **Snuba image** — `ghcr.io/getsentry/snuba:nightly`, the tag devservices
+  uses, pulled on first `snuba-up`. It drifts: `docker pull` it to update, then
+  recreate a slot's Snuba with `snuba-down` + `snuba-up` (new ClickHouse
+  migrations apply on `snuba bootstrap`). Pin with `HAR_SNUBA_IMAGE=<image>`.
+- **ClickHouse** — same image as Snuba's devservices config; data in volume
+  `har-sentry_agent-clickhouse-data`. Memory is capped at 4 GiB in
+  `clickhouse/config.xml`. Measured idle: ClickHouse ~0.4 GB, each Snuba API
+  ~0.16 GB.
 - **Node / Python pins** come from the repo (`devenv/config.ini`, `.node-version`,
   `.python-version`, `uv.lock`, `pnpm-lock.yaml`) — nothing to update here.
   If the local `uv` is too old to download the exact `.python-version` patch,

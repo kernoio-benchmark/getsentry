@@ -1,0 +1,39 @@
+<!--
+  ClickHouse server config for the harness's shared ClickHouse.
+
+  Copied from getsentry/snuba devservices/clickhouse/config.xml (what
+  `devservices up` mounts), with one change: memory is capped at a fixed 4 GiB
+  instead of 50% of host RAM, because this one server is shared by every agent
+  slot on a machine that also runs their Django + rsbuild processes. Raise it
+  if large Snuba queries in tests fail with MEMORY_LIMIT_EXCEEDED.
+-->
+<yandex>
+    <max_server_memory_usage>4294967296</max_server_memory_usage>
+    <merge_tree>
+        <old_parts_lifetime>1</old_parts_lifetime>
+    </merge_tree>
+
+    <!--
+    ClickHouse's own diagnostic log tables have no TTL by default, so in a
+    long-lived dev volume they grow without bound (tens of GB of trace_log
+    alone). Same TTLs as Snuba's devservices config.
+    -->
+    <trace_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+    </trace_log>
+    <text_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+    </text_log>
+    <metric_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+    </metric_log>
+    <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+    </asynchronous_metric_log>
+    <query_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+    </part_log>
+</yandex>

@@ -9,6 +9,10 @@
 #   conf           writes $SENTRY_CONF/{sentry.conf.py,config.yml} from env
 #   changed-files  files changed in the slot vs its base commit (used by stages)
 #   smoke          HARNESS_READINESS_CMD — "agent usable" check (login + API + UI)
+#   snuba-up [live|test]  start this slot's Snuba (hooks/post-launch.sh: live;
+#                         stages/backend-tests.sh: test) — idempotent
+#   snuba-down     remove this slot's Snuba containers + ClickHouse DBs (post-teardown)
+#   snuba-status   health of this slot's two Snuba instances
 #
 # It resolves paths from its own location (the MAIN checkout's .har/), so it
 # works whether or not .har/ is committed into the session worktree.
@@ -302,11 +306,110 @@ cmd_smoke() {
   die "UI bundle $fe$script not served after 180s — check: har env agent ${AGENT_ID:-<id>} logs ui"
 }
 
+# ── Per-slot Snuba ────────────────────────────────────────────────────────────
+# Same isolation as Sentry's CI per-worker Snuba
+# (.github/workflows/scripts/bootstrap-snuba.py): ONE shared ClickHouse server,
+# and per consumer (here: per slot and per purpose) its own
+#   * ClickHouse database   — `snuba bootstrap --force` with CLICKHOUSE_DATABASE
+#   * Snuba API container   — `snuba api`, own host port
+#   * Snuba Redis DB        — on the shared harness Redis
+# Two instances per slot, so test resets (/tests/<dataset>/drop) never wipe the
+# running app's data:
+#   live  har-sentry-snuba-agent<N>       127.0.0.1:1218<N>  db har_agent<N>       redis 16+N
+#   test  har-sentry-snuba-test-agent<N>  127.0.0.1:1228<N>  db har_agent<N>_test  redis 48+N
+# Kafka is not run: the API containers don't consume, test events are written
+# over HTTP (/tests/entities/<entity>/insert) and bootstrap uses --no-kafka.
+SNUBA_IMAGE="${HAR_SNUBA_IMAGE:-ghcr.io/getsentry/snuba:nightly}" # what devservices runs
+SNUBA_NETWORK="har-sentry_default"
+CLICKHOUSE_CONTAINER="har-sentry-clickhouse-1"
+
+snuba_vars() { # <live|test> → sets SNUBA_{NAME,PORT,DB,REDIS_DB}
+  local purpose="$1" id="${AGENT_ID:?AGENT_ID not set}"
+  [[ "$id" =~ ^[1-9]$ ]] || die "per-slot Snuba ports need a single-digit agent id (got '$id')"
+  case "$purpose" in
+    live) SNUBA_NAME="har-sentry-snuba-agent${id}" SNUBA_PORT="1218${id}" SNUBA_DB="har_agent${id}" SNUBA_REDIS_DB=$((16 + id)) ;;
+    test) SNUBA_NAME="har-sentry-snuba-test-agent${id}" SNUBA_PORT="1228${id}" SNUBA_DB="har_agent${id}_test" SNUBA_REDIS_DB=$((48 + id)) ;;
+    *) die "unknown Snuba purpose '$purpose' (live|test)" ;;
+  esac
+}
+
+snuba_healthy() { curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:$1/health" 2>/dev/null; }
+
+clickhouse_query() { docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "$1"; }
+
+cmd_snuba_up() {
+  local purpose="${1:-live}"
+  snuba_vars "$purpose"
+  if snuba_healthy "$SNUBA_PORT"; then
+    log "Snuba ($purpose) already healthy: http://127.0.0.1:$SNUBA_PORT"
+    return 0
+  fi
+  docker ps --format '{{.Names}}' | grep -qx "$CLICKHOUSE_CONTAINER" ||
+    die "$CLICKHOUSE_CONTAINER is not running — run: har env setup-infra"
+
+  local -a env_args=(
+    -e CLICKHOUSE_HOST=clickhouse -e CLICKHOUSE_PORT=9000 -e CLICKHOUSE_HTTP_PORT=8123
+    -e "CLICKHOUSE_DATABASE=$SNUBA_DB"
+    -e REDIS_HOST=redis -e REDIS_PORT=6379 -e "REDIS_DB=$SNUBA_REDIS_DB"
+    -e SNUBA_SETTINGS=docker
+  )
+
+  log "Snuba ($purpose): ClickHouse database $SNUBA_DB + migrations (snuba bootstrap --no-kafka)"
+  clickhouse_query "CREATE DATABASE IF NOT EXISTS $SNUBA_DB"
+  docker run --rm --network "$SNUBA_NETWORK" "${env_args[@]}" "$SNUBA_IMAGE" \
+    bootstrap --no-kafka --force >/dev/null 2>&1 ||
+    die "snuba bootstrap failed for $SNUBA_DB — rerun by hand to see why: docker run --rm --network $SNUBA_NETWORK ${env_args[*]} $SNUBA_IMAGE bootstrap --no-kafka --force"
+
+  log "Snuba ($purpose): starting $SNUBA_NAME on 127.0.0.1:$SNUBA_PORT"
+  docker rm -f "$SNUBA_NAME" >/dev/null 2>&1 || true
+  docker run -d --name "$SNUBA_NAME" --restart unless-stopped --network "$SNUBA_NETWORK" \
+    --label "har.agent=${AGENT_ID}" --label "har.snuba=$purpose" \
+    -p "127.0.0.1:$SNUBA_PORT:1218" "${env_args[@]}" -e DEBUG=1 \
+    "$SNUBA_IMAGE" api >/dev/null || die "docker run $SNUBA_NAME failed"
+
+  local i
+  for i in $(seq 1 60); do
+    if snuba_healthy "$SNUBA_PORT"; then
+      log "Snuba ($purpose) healthy: http://127.0.0.1:$SNUBA_PORT"
+      return 0
+    fi
+    sleep 2
+  done
+  docker logs --tail 20 "$SNUBA_NAME" >&2 || true
+  die "$SNUBA_NAME not healthy after 120s"
+}
+
+cmd_snuba_down() {
+  local purpose
+  for purpose in live test; do
+    snuba_vars "$purpose"
+    if docker ps -a --format '{{.Names}}' | grep -qx "$SNUBA_NAME"; then
+      docker rm -f "$SNUBA_NAME" >/dev/null && log "Removed $SNUBA_NAME"
+    fi
+    if docker ps --format '{{.Names}}' | grep -qx "$CLICKHOUSE_CONTAINER"; then
+      clickhouse_query "DROP DATABASE IF EXISTS $SNUBA_DB SYNC" && log "Dropped ClickHouse database $SNUBA_DB"
+    fi
+  done
+}
+
+cmd_snuba_status() {
+  local purpose state
+  for purpose in live test; do
+    snuba_vars "$purpose"
+    if snuba_healthy "$SNUBA_PORT"; then state=healthy; else state=down; fi
+    printf '%-5s %-8s http://127.0.0.1:%s  (%s, ClickHouse db %s)\n' \
+      "$purpose" "$state" "$SNUBA_PORT" "$SNUBA_NAME" "$SNUBA_DB"
+  done
+}
+
 case "${1:-}" in
   install) cmd_install ;;
   conf) cmd_conf ;;
   migrate) cmd_migrate ;;
   changed-files) cmd_changed_files ;;
   smoke) cmd_smoke ;;
-  *) die "usage: sentry-slot.sh install|conf|migrate|changed-files|smoke" ;;
+  snuba-up) cmd_snuba_up "${2:-live}" ;;
+  snuba-down) cmd_snuba_down ;;
+  snuba-status) cmd_snuba_status ;;
+  *) die "usage: sentry-slot.sh install|conf|migrate|changed-files|smoke|snuba-up [live|test]|snuba-down|snuba-status" ;;
 esac

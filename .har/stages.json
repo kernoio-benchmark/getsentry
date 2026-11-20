@@ -119,7 +119,7 @@
       "kind": "test",
       "tier": "full",
       "requiresAgentId": true,
-      "description": "pytest for changed/related Python test files with the HAR plugin (Snuba/Kafka-only failures reported as skipped); id kept as 'unit-tests' because HAR re-adds a bare 'pytest -q' stage under that name",
+      "description": "pytest for changed/related Python test files with the HAR plugin (Snuba tests run against the slot's own test Snuba; Kafka/Symbolicator/Objectstore-only failures reported as skipped); id kept as 'unit-tests' because HAR re-adds a bare 'pytest -q' stage under that name",
       "script": "stages/backend-tests.sh",
       "artifacts": [
         {

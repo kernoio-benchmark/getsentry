@@ -1,9 +1,12 @@
 # Shared infrastructure — ONE instance serves all agent slots.
 #
 # Sentry's hard runtime dependencies for the web app are PostgreSQL and Redis.
-# Everything else in devservices/config.yml (snuba + clickhouse + kafka, relay,
-# symbolicator, taskbroker, objectstore, ...) is intentionally NOT run by the
-# harness — see .har/README.md "Skipped full-dev setup".
+# ClickHouse backs Snuba: ONE server here, but each slot gets its own Snuba API
+# container and its own ClickHouse databases (started by hooks/post-launch.sh
+# via scripts/sentry-slot.sh snuba-up) — the same per-worker isolation Sentry's
+# CI uses (.github/workflows/scripts/bootstrap-snuba.py).
+# Kafka, Relay, symbolicator, taskbroker, objectstore, ... are intentionally NOT
+# run — see .har/README.md "Skipped full-dev setup".
 #
 # Only services listed in HARNESS_INFRA_SERVICES (harness.env) are started by
 # `har env setup-infra`. Project name: har-sentry.
@@ -48,7 +51,8 @@ services:
       # rescanned. Keep in sync with REDIS_PORT in env.template and the
       # default in scripts/sentry-slot.sh. Slots isolate by logical DB index:
       #   0 = template migration, 1..N = slot N (devserver),
-      #   32+N = slot N pytest (see pytest/har_sentry_pytest.py).
+      #   16+N = slot N Snuba (live app), 32+N = slot N pytest
+      #   (see pytest/har_sentry_pytest.py), 48+N = slot N Snuba (tests).
       - "16479:6379"
     command: ["redis-server", "--databases", "64", "--save", "", "--appendonly", "no"]
     healthcheck:
@@ -57,5 +61,35 @@ services:
       timeout: 3s
       retries: 5
 
+  clickhouse:
+    # Same image as Snuba's devservices config (getsentry/snuba
+    # devservices/config.yml). Per-slot Snuba API containers reach it as
+    # `clickhouse` on the har-sentry_default network, and
+    # scripts/sentry-slot.sh manages databases via `docker exec`.
+    # Databases: har_agent<N> (slot N live app), har_agent<N>_test (slot N pytest).
+    image: ghcr.io/getsentry/image-mirror-altinity-clickhouse-server:25.8.33.10002.altinitystable
+    restart: always
+    ports:
+      # HTTP interface for humans/debugging only (curl, clickhouse UI). FIXED,
+      # localhost-only — reserved as the clickhouse lane in harness.env.
+      - "127.0.0.1:18123:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - agent-clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/sentry.xml:ro
+      - ./clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
+      # The image ships a users.d/default-password.xml that sets a password;
+      # override it so Snuba's passwordless `default` user works (as devservices does).
+      - ./clickhouse/default-password.xml:/etc/clickhouse-server/users.d/default-password.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   agent-db-data:
+  agent-clickhouse-data:

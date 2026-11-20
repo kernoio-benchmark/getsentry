@@ -165,16 +165,24 @@ commit gate: [`.har/README.md`](.har/README.md) and [`.har/stages.json`](.har/st
 
 ### HAR project-specific notes
 
-- **What a slot runs**: the Sentry web app only — Django (`sentry devserver --no-watchers`)
-  on `API_PORT` and the rsbuild dev server on `FE_PORT` (open this one). Shared,
-  once per machine: Postgres 14 (per-slot DB `agent_<id>` cloned from a migrated
-  template) and Redis 7 (per-slot DB index). Get URLs with `har env agent <id> url`.
+- **What a slot runs**: Django (`sentry devserver --no-watchers`) on `API_PORT`, the
+  rsbuild dev server on `FE_PORT` (open this one), and its own Snuba API
+  (`SNUBA` = `127.0.0.1:1218<id>`; pytest gets a second one on `1228<id>`).
+  Shared, once per machine: Postgres 14 (per-slot DB `agent_<id>` cloned from a
+  migrated template), Redis 7 (per-slot DB index) and ClickHouse (per-slot
+  databases `har_agent<id>[_test]`). Diagram: `.har/README.md` → "How a slot is
+  wired". Get URLs with `har env agent <id> url`.
 - **Login**: `admin@sentry.io` / `admin`, org `sentry`, project `internal`
   (created by `sentry upgrade` in dev mode; no seed step).
-- **Not available in slots**: Snuba/ClickHouse/Kafka, Relay, taskworkers — Issues,
-  Discover, Explore and event ingestion error out; tasks run eagerly in-process.
-  Don't start devservices yourself; tests needing them are reported as skipped by
-  full verify — call them out in your handoff.
+- **Snuba-backed tests run for real** (`SnubaTestCase`, `requires_snuba`) against the
+  slot's test Snuba. Snuba-backed pages load, but the running app's Snuba stays
+  empty: there is no ingestion.
+- **Not available in slots**: Kafka, Relay, taskworkers, Symbolicator, objectstore —
+  SDK events are not ingested; tasks run eagerly in-process. Don't start
+  devservices or a Snuba yourself (repair with
+  `bash .har/scripts/sentry-slot.sh snuba-up` and the slot env loaded); tests
+  needing those services are reported as `HAR:` skipped by full verify — call
+  them out in your handoff.
 - **Inside a slot the commands above do NOT apply as written**: they assume
   devservices on `localhost:5432`/`6379`, which on this machine belong to other
   projects. Never run bare `.venv/bin/pytest` and never conclude "tests can't run

@@ -5,8 +5,12 @@
 #   * changed src/sentry/<path>/<mod>.py maps to tests/sentry/<path>/test_<mod>.py
 #     (when that file exists).
 # No related tests → pass with a note. Uses the shared harness Postgres
-# (per-slot test DBs) and Redis via .har/pytest/har_sentry_pytest.py; tests that
-# need Snuba/Kafka are reported as skipped. Log: .har/artifacts/backend-tests/.
+# (per-slot test DBs) and Redis via .har/pytest/har_sentry_pytest.py, and the
+# slot's own TEST Snuba (har-sentry-snuba-test-agent<id> on 1228<id>, its own
+# ClickHouse database — started here on first use, removed on teardown), so
+# `reset_snuba` never touches the running app's or another slot's data. Tests
+# needing Kafka/Symbolicator/Objectstore are reported as skipped.
+# Log: .har/artifacts/backend-tests/.
 # Set HAR_TESTS="<paths or node ids>" to run an explicit selection instead.
 set -euo pipefail
 
@@ -60,6 +64,14 @@ if [ "${#tests[@]}" -eq 0 ]; then
 fi
 
 echo "Running ${#tests[@]} test file(s): ${tests[*]}" | tee "$log_file"
+
+# The slot's test Snuba (idempotent; ~25s the first time per session).
+if AGENT_ID="$AGENT_ID" bash "$HAR_DIR/scripts/sentry-slot.sh" snuba-up test 2>&1 | tee -a "$log_file"; then
+  export HAR_SNUBA_TEST_URL="http://127.0.0.1:1228${AGENT_ID}"
+  export SNUBA="$HAR_SNUBA_TEST_URL"
+else
+  echo "WARNING: slot test Snuba could not start — Snuba-dependent tests will be reported as HAR: skipped." | tee -a "$log_file"
+fi
 set +e
 PYTHONPATH="$HAR_DIR/pytest${PYTHONPATH:+:$PYTHONPATH}" \
   "${PYTHON_BIN:-.venv/bin/python}" -m pytest -p har_sentry_pytest --reuse-db -q -rs \

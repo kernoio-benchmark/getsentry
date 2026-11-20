@@ -14,11 +14,17 @@ names. The harness runs ONE shared Postgres and Redis for every slot, so:
   (run without xdist);
 * at session start, test DB names get an ``_agent<id>`` suffix
   (test_region_agent1, test_control_agent1, …);
-* tests that fail only because Snuba/Kafka/Symbolicator/Objectstore are not
-  running are reported as *skipped* with a ``HAR:`` reason — the harness does
-  not run those services. That covers both the ``requires_*`` markers and
-  tests that never declare Snuba but fail after a Snuba connection was refused
-  (e.g. an endpoint returning 500 because its Snuba query failed).
+* Snuba: when HAR_SNUBA_TEST_URL is set (backend-tests.sh started the slot's
+  test Snuba, ``sentry-slot.sh snuba-up test``), ``xdist.get_snuba_url`` returns
+  it. That is the hook Sentry's CI uses for per-worker Snuba, and both
+  ``settings.SENTRY_SNUBA`` and the ``requires_snuba`` check read it — so tests
+  run against the slot's own Snuba (its own ClickHouse database), never the
+  running app's or another slot's. Snuba failures are then real failures;
+* tests that fail only because Kafka/Symbolicator/Objectstore are not running —
+  and Snuba, when the slot's test Snuba could not be started — are reported as
+  *skipped* with a ``HAR:`` reason. That covers both the ``requires_*`` markers
+  and tests that never declare Snuba but fail after a Snuba connection was
+  refused (e.g. an endpoint returning 500 because its Snuba query failed).
 """
 
 from __future__ import annotations
@@ -33,15 +39,24 @@ _AGENT_ID = os.environ.get("AGENT_ID", "0")
 _REDIS_PORT = int(os.environ.get("REDIS_PORT", "16479"))
 _REDIS_DB = 32 + int(_AGENT_ID)
 
+# Set by stages/backend-tests.sh once the slot's test Snuba is healthy.
+_SNUBA_URL = os.environ.get("HAR_SNUBA_TEST_URL") or None
+
 _SNUBA_DOWN = {"hit": False}
 _SNUBA_DOWN_SIGNS = ("Connection refused", "Max retries exceeded", "Failed to establish")
 
 _MISSING_SERVICE_MARKERS = (
-    "requires 'snuba' server running",
+    *(() if _SNUBA_URL else ("requires 'snuba' server running",)),
     "requires 'kafka' server running",
     "requires 'symbolicator' server running",
     "requires 'objectstore' server running",
 )
+
+
+def _use_slot_snuba() -> None:
+    from sentry.testutils.pytest import xdist
+
+    xdist.get_snuba_url = lambda: _SNUBA_URL  # type: ignore[assignment]
 
 
 def _patch_redis() -> None:
@@ -91,6 +106,9 @@ def _flag_snuba_connection_errors() -> None:
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     _patch_redis()
+    if _SNUBA_URL:
+        # Before sentry's pytest_configure reads it into settings.SENTRY_SNUBA.
+        _use_slot_snuba()
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -99,7 +117,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # pytest-django's session fixture creates the test databases.
     from django.conf import settings
 
-    _flag_snuba_connection_errors()
+    if not _SNUBA_URL:
+        _flag_snuba_connection_errors()
 
     suffix = f"_agent{_AGENT_ID}"
     for db in settings.DATABASES.values():
@@ -124,7 +143,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]):  
                 report.longrepr = (
                     str(item.path),
                     item.location[1] or 0,
-                    f"HAR: {marker} (not provided by the harness)",
+                    f"HAR: {marker} (not available in harness slots)",
                 )
                 break
         else:
@@ -133,5 +152,5 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]):  
                 report.longrepr = (
                     str(item.path),
                     item.location[1] or 0,
-                    "HAR: failed after a Snuba query could not connect (Snuba not provided by the harness)",
+                    "HAR: failed after a Snuba query could not connect (slot test Snuba not running)",
                 )

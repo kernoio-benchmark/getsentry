@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# post-teardown — drop this slot's pytest databases (created by the
-# backend-tests stage: test_{region,control,secondary}_agent<id>), so the next
-# session on this slot builds them from its own branch's models. HAR itself
-# already drops agent_<id>. Failure only warns (HARNESS_HOOK_POST_FAILURE=warn).
+# post-teardown — remove what the slot created outside HAR's own bookkeeping,
+# so the next session on this slot starts from its own branch's models:
+#   * pytest databases (backend-tests stage): test_{region,control,secondary}_agent<id>
+#   * the slot's Snuba containers + ClickHouse databases (live and test):
+#     scripts/sentry-slot.sh snuba-down
+# HAR itself already drops agent_<id>. Failure only warns (HARNESS_HOOK_POST_FAILURE=warn).
 set -euo pipefail
 
 : "${AGENT_ID:?AGENT_ID not set (HAR hook contract)}"
-container="har-sentry-db-1"
-docker ps --format '{{.Names}}' | grep -qx "$container" || exit 0
+HAR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for alias in region control secondary; do
-  docker exec "$container" dropdb -U postgres --if-exists "test_${alias}_agent${AGENT_ID}"
-done
-echo "Dropped pytest databases for agent ${AGENT_ID}." >&2
+container="har-sentry-db-1"
+if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+  for alias in region control secondary; do
+    docker exec "$container" dropdb -U postgres --if-exists "test_${alias}_agent${AGENT_ID}"
+  done
+  echo "Dropped pytest databases for agent ${AGENT_ID}." >&2
+fi
+
+bash "$HAR_DIR/scripts/sentry-slot.sh" snuba-down
