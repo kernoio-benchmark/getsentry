@@ -812,7 +812,7 @@ describe('projectPerformance', () => {
 
     render(<ProjectPerformance />, {
       organization: OrganizationFixture({
-        features: ['performance-web-vitals-seer-suggestions', 'ai-issue-detection'],
+        features: ['performance-web-vitals-seer-suggestions'],
       }),
       initialRouterConfig,
     });
