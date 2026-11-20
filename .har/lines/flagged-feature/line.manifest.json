@@ -1,0 +1,96 @@
+{
+  "kind": "line",
+  "id": "flagged-feature",
+  "title": "Flagged full-stack feature",
+  "program": "line.json",
+  "files": [
+    {
+      "src": "stages/flagged-feature-lib.sh",
+      "dest": ".har/stages/flagged-feature-lib.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flagged-feature-flag-registered.sh",
+      "dest": ".har/stages/flagged-feature-flag-registered.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flagged-feature-migrations-consistent.sh",
+      "dest": ".har/stages/flagged-feature-migrations-consistent.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flagged-feature-backend-gated.sh",
+      "dest": ".har/stages/flagged-feature-backend-gated.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flagged-feature-frontend-gated.sh",
+      "dest": ".har/stages/flagged-feature-frontend-gated.sh",
+      "executable": true
+    }
+  ],
+  "stages": [
+    {
+      "id": "flagged-feature-flag-registered",
+      "kind": "test",
+      "description": "flagged-feature line: HAR_FLAG registered in temporary.py as FlagPole, default off — never on verify",
+      "script": "stages/flagged-feature-flag-registered.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-flag-registered",
+          "kind": "directory"
+        }
+      ],
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-migrations-consistent",
+      "kind": "test",
+      "description": "flagged-feature line: makemigrations --check --dry-run in the slot (CI migration-check) — never on verify",
+      "script": "stages/flagged-feature-migrations-consistent.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-migrations-consistent",
+          "kind": "directory"
+        }
+      ],
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-backend-gated",
+      "kind": "test",
+      "description": "flagged-feature line: src/ reads HAR_FLAG and tests/ enable it — never on verify",
+      "script": "stages/flagged-feature-backend-gated.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-backend-gated",
+          "kind": "directory"
+        }
+      ],
+      "tier": "full"
+    },
+    {
+      "id": "flagged-feature-frontend-gated",
+      "kind": "test",
+      "description": "flagged-feature line: api_expose=True, static/app checks the short name, a spec enables it — never on verify",
+      "script": "stages/flagged-feature-frontend-gated.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {
+          "path": ".har/artifacts/flagged-feature-frontend-gated",
+          "kind": "directory"
+        }
+      ],
+      "tier": "full"
+    }
+  ],
+  "nextSteps": [
+    "har line status flagged-feature",
+    "HAR_FLAG=organizations:<name> har line gate S2 --line flagged-feature --agent <slot>"
+  ],
+  "docsPath": ".har/lines/flagged-feature/README.md"
+}

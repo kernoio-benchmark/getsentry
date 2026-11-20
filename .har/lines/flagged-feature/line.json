@@ -1,0 +1,156 @@
+{
+  "contractVersion": 1,
+  "id": "flagged-feature",
+  "title": "Flagged full-stack feature",
+  "description": "Deliver one new feature dark, behind a FlagPole flag, as separately deployable PRs: flag + data model, then API, then UI, then an in-slot proof. Backend lands before the frontend that depends on it. Pass the flag to every gate as HAR_FLAG=organizations:<name>.",
+  "skills": [
+    {"id": "factory-line", "role": "orchestrator", "install": "agent-managed"},
+    {
+      "id": "feature-flags",
+      "role": "station",
+      "install": "repo:.agents/skills/feature-flags"
+    },
+    {
+      "id": "django-models",
+      "role": "station",
+      "install": "repo:.agents/skills/django-models"
+    },
+    {
+      "id": "generate-migration",
+      "role": "station",
+      "install": "repo:.agents/skills/generate-migration"
+    },
+    {
+      "id": "sentry-security",
+      "role": "station",
+      "install": "repo:.agents/skills/sentry-security"
+    },
+    {
+      "id": "sentry-backend-bugs",
+      "role": "station",
+      "install": "repo:.agents/skills/sentry-backend-bugs"
+    },
+    {
+      "id": "frontend-data-fetching",
+      "role": "station",
+      "install": "repo:.agents/skills/frontend-data-fetching"
+    },
+    {
+      "id": "react-testing",
+      "role": "station",
+      "install": "repo:.agents/skills/react-testing"
+    },
+    {
+      "id": "sentry-javascript-bugs",
+      "role": "station",
+      "install": "repo:.agents/skills/sentry-javascript-bugs"
+    },
+    {
+      "id": "verify-sentry",
+      "role": "station",
+      "install": "repo:.agents/skills/verify-sentry"
+    }
+  ],
+  "mcp": [
+    {
+      "name": "linear",
+      "why": "the feature ticket is the traveler: contract from S1, PR links, gate evidence per station",
+      "required": false
+    },
+    {"name": "github", "why": "pull requests", "required": false}
+  ],
+  "plugins": [],
+  "stations": [
+    {
+      "id": "S1",
+      "title": "Contract",
+      "description": "No code, no slot. Write on the ticket: the flag name (organizations:<name>, temporary, FlagPole, api_expose if the UI needs it), the models and which silo owns them, each endpoint's route/method/scopes/request+response shape (camelCase bodies, string ids, `detail` errors), and the UI entry point. A human approves the contract before S2.",
+      "skills": ["feature-flags", "django-models"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S2",
+      "title": "Flag + data model (backend PR 1)",
+      "description": "One slot, backend only: register the flag in temporary.py (default off), add the model(s) and migration with the generate-migration skill, apply it to the slot DB (sentry upgrade --noinput, then har env agent <id> restart). Skip the model part if the contract has none; the flag still lands here.",
+      "skills": ["feature-flags", "django-models", "generate-migration"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S3",
+      "title": "API behind the flag (backend PR 2)",
+      "description": "One slot, backend only, after PR 1 merged: endpoints/serializers per the contract, every new path gated with features.has(HAR_FLAG, ...), tests with self.feature(...) on and a flag-off case. Review with sentry-security (org scoping, IDOR) and sentry-backend-bugs before handoff. Never add an RPC method and its first caller in the same PR.",
+      "skills": ["sentry-security", "sentry-backend-bugs"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S4",
+      "title": "UI behind the flag (frontend PR)",
+      "description": "One slot, static/ only, after the backend PRs are DEPLOYED (the frontend calls the new API): UI gated with organization.features.includes('<short name>'), data via apiOptions/useQuery, specs that render with the flag on. Review with sentry-javascript-bugs.",
+      "skills": ["frontend-data-fetching", "react-testing", "sentry-javascript-bugs"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S5",
+      "title": "Prove in a slot",
+      "description": "One slot on a branch containing all PRs: enable the flag for org `sentry` in the slot, drive the feature as a user with the verify-sentry skill, attach screenshots and API evidence to the ticket. Also check the flag-off path shows nothing. No new code unless the proof finds a defect — then fix it in the PR that owns it and re-run that station's gate.",
+      "skills": ["verify-sentry"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    }
+  ],
+  "gate": {
+    "cumulative": true,
+    "optInEnv": null,
+    "stages": [
+      {"id": "flagged-feature-flag-registered", "fromStation": "S2", "tier": "full"},
+      {
+        "id": "flagged-feature-migrations-consistent",
+        "fromStation": "S2",
+        "tier": "full"
+      },
+      {"id": "pr-split", "fromStation": "S2", "tier": "full"},
+      {"id": "flagged-feature-backend-gated", "fromStation": "S3", "tier": "full"},
+      {"id": "flagged-feature-frontend-gated", "fromStation": "S4", "tier": "full"}
+    ]
+  },
+  "extraStages": [
+    {
+      "id": "flagged-feature-flag-registered",
+      "kind": "test",
+      "tier": "full",
+      "description": "HAR_FLAG registered in temporary.py as FlagPole, default off"
+    },
+    {
+      "id": "flagged-feature-migrations-consistent",
+      "kind": "test",
+      "tier": "full",
+      "description": "makemigrations --check --dry-run (CI's migration-check) in the slot"
+    },
+    {
+      "id": "flagged-feature-backend-gated",
+      "kind": "test",
+      "tier": "full",
+      "description": "src/ reads HAR_FLAG and tests/ enable it"
+    },
+    {
+      "id": "flagged-feature-frontend-gated",
+      "kind": "test",
+      "tier": "full",
+      "description": "api_expose=True, static/app checks the short name, a spec enables it"
+    }
+  ],
+  "handoff": {
+    "autonomousShip": false,
+    "waitFor": "human review and merge of each PR; backend PRs deployed before S4 starts; human decides rollout in sentry-options-automator"
+  },
+  "traveler": {
+    "kind": "linear-issue-comment",
+    "note": "S1 contract, then one comment per station with PR link and gate result. Squash merges drop commit footers, so the ticket is the record."
+  },
+  "prototypeNotes": [
+    "HAR_FLAG is per-run input: HAR_FLAG=organizations:my-feature har line gate S3 --line flagged-feature --agent 3.",
+    "S2 and S3 may be one PR when there is no model; keep them separate stations so the gate still asks both questions.",
+    "pr-split runs at every station from S2: each slot's diff is one deployable PR, never static/ mixed with src/.",
+    "S5 has no stage of its own yet: the proof is verify-sentry evidence on the ticket. When a proof catches a class of defect, add a stage and tag it fromStation S5.",
+    "Rollout (flagpole.yaml in sentry-options-automator) is out of scope — the line ends at a dark, proven feature."
+  ]
+}

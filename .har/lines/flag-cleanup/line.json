@@ -1,0 +1,125 @@
+{
+  "contractVersion": 1,
+  "id": "flag-cleanup",
+  "title": "FlagPole flag cleanup",
+  "description": "Retire one fully rolled-out FlagPole flag in the fixed order from the remove-option-or-flag skill: collapse backend reads, collapse frontend reads, remove the automator block, then remove the registration. One run of the line = one flag; pass it to every gate as HAR_FLAG=organizations:<name>.",
+  "skills": [
+    {"id": "factory-line", "role": "orchestrator", "install": "agent-managed"},
+    {
+      "id": "remove-option-or-flag",
+      "role": "station",
+      "install": "repo:.agents/skills/remove-option-or-flag"
+    },
+    {
+      "id": "feature-flags",
+      "role": "station",
+      "install": "repo:.agents/skills/feature-flags"
+    },
+    {
+      "id": "react-testing",
+      "role": "station",
+      "install": "repo:.agents/skills/react-testing"
+    }
+  ],
+  "mcp": [
+    {
+      "name": "linear",
+      "why": "the cleanup ticket is the traveler: values found in S0, PR links, deploy confirmations",
+      "required": false
+    },
+    {
+      "name": "github",
+      "why": "PRs in getsentry/sentry and sentry-options-automator",
+      "required": false
+    }
+  ],
+  "plugins": [],
+  "stations": [
+    {
+      "id": "S0",
+      "title": "Preconditions",
+      "description": "No PR. Confirm the flag is temporary (not a plan entitlement in permanent.py), list every read with `git grep -n '<flag>' src tests static` and every value in sentry-options-automator options/default/flagpole.yaml at HEAD, and record the rolled-out outcome on the ticket. STOP and ask the human if the automator value is not a clean 100%/0%, is drifted, or getsentry reads the flag too — that is a product decision.",
+      "skills": ["remove-option-or-flag"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S1",
+      "title": "Collapse backend reads (PR 1a)",
+      "description": "One slot, backend only: collapse every features.has / self.feature(...) read in src/ and tests/ to the outcome that won, delete the losing branch and everything only it reached. Keep the registration. If the flag has no backend reads, the station is a no-op and its gate passes.",
+      "skills": ["remove-option-or-flag"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S2",
+      "title": "Collapse frontend reads (PR 1b)",
+      "description": "One slot, static/ only, started after PR 1a merged (the cumulative gate re-checks backend reads, so running it early fails): collapse organization.features.includes / <Feature> reads, delete the losing UI, gated routes and fixtures. Keep the registration.",
+      "skills": ["remove-option-or-flag", "react-testing"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    },
+    {
+      "id": "S3",
+      "title": "Remove the automator block (PR 2, other repo)",
+      "description": "Not in this repo and no HAR slot: remove the flag block from sentry-options-automator options/default/flagpole.yaml, only after PR 1a and 1b are DEPLOYED to all regions. Human merges and confirms the automator run is green. The gate is re-run here on a fresh slot to prove no read crept back in.",
+      "skills": ["remove-option-or-flag"],
+      "work": {"source": "github", "ids": [], "optional": true}
+    },
+    {
+      "id": "S4",
+      "title": "Remove the registration (PR 3)",
+      "description": "One slot, backend: delete the manager.add(...) line from temporary.py (and any SENTRY_FEATURES default), only after S3 is deployed and green.",
+      "skills": ["remove-option-or-flag"],
+      "work": {"source": "linear", "ids": [], "optional": true}
+    }
+  ],
+  "gate": {
+    "cumulative": true,
+    "optInEnv": null,
+    "stages": [
+      {"id": "flag-cleanup-not-permanent", "fromStation": "S0", "tier": "full"},
+      {"id": "flag-cleanup-reads-backend", "fromStation": "S1", "tier": "full"},
+      {"id": "pr-split", "fromStation": "S1", "tier": "full"},
+      {"id": "flag-cleanup-reads-frontend", "fromStation": "S2", "tier": "full"},
+      {"id": "flag-cleanup-registration-absent", "fromStation": "S4", "tier": "full"}
+    ]
+  },
+  "extraStages": [
+    {
+      "id": "flag-cleanup-not-permanent",
+      "kind": "test",
+      "tier": "full",
+      "description": "Flag is not a permanent.py entitlement; warns on default=True"
+    },
+    {
+      "id": "flag-cleanup-reads-backend",
+      "kind": "test",
+      "tier": "full",
+      "description": "No read of HAR_FLAG left in src/ or tests/ (registration excluded)"
+    },
+    {
+      "id": "flag-cleanup-reads-frontend",
+      "kind": "test",
+      "tier": "full",
+      "description": "No quoted read of the flag's short name left in static/"
+    },
+    {
+      "id": "flag-cleanup-registration-absent",
+      "kind": "test",
+      "tier": "full",
+      "description": "HAR_FLAG appears nowhere in src/, tests/, static/, fixtures/"
+    }
+  ],
+  "handoff": {
+    "autonomousShip": false,
+    "waitFor": "human review and merge of each PR, and confirmation that it is deployed to all regions before the next station starts"
+  },
+  "traveler": {
+    "kind": "linear-issue-comment",
+    "note": "One comment per station on the cleanup ticket: S0 values found (automator default/regions), PR links, deploy confirmations. Squash merges drop commit footers, so the ticket is the record."
+  },
+  "prototypeNotes": [
+    "HAR_FLAG is per-run input, not program data: HAR_FLAG=organizations:my-feature har line gate S2 --line flag-cleanup --agent 3.",
+    "Merged is not deployed. Each station after S1 starts only when the previous PR is out everywhere — the gate cannot see deploys; the traveler records them.",
+    "reads-frontend matches any quoted occurrence of the short name in static/; a generic name (e.g. 'insights') can hit unrelated strings — list those in the handoff instead of renaming them.",
+    "getsentry reads are out of scope for this repo; S0 must ask whether getsentry reads the flag before S3."
+  ]
+}

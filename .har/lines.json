@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "lines": [
+    {
+      "id": "flag-cleanup",
+      "source": "local",
+      "spec": "flag-cleanup",
+      "stageIds": [
+        "flag-cleanup-not-permanent",
+        "flag-cleanup-reads-backend",
+        "flag-cleanup-reads-frontend",
+        "flag-cleanup-registration-absent"
+      ],
+      "programPath": ".har/lines/flag-cleanup/line.json",
+      "installedAt": "2026-11-20T16:45:06.354Z"
+    },
+    {
+      "id": "flagged-feature",
+      "source": "local",
+      "spec": "flagged-feature",
+      "stageIds": [
+        "flagged-feature-flag-registered",
+        "flagged-feature-migrations-consistent",
+        "flagged-feature-backend-gated",
+        "flagged-feature-frontend-gated"
+      ],
+      "programPath": ".har/lines/flagged-feature/line.json",
+      "installedAt": "2026-11-20T16:45:06.552Z"
+    }
+  ]
+}

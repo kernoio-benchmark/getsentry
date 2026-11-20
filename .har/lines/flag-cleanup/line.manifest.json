@@ -1,0 +1,84 @@
+{
+  "kind": "line",
+  "id": "flag-cleanup",
+  "title": "FlagPole flag cleanup",
+  "program": "line.json",
+  "files": [
+    {
+      "src": "stages/flag-cleanup-lib.sh",
+      "dest": ".har/stages/flag-cleanup-lib.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flag-cleanup-not-permanent.sh",
+      "dest": ".har/stages/flag-cleanup-not-permanent.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flag-cleanup-reads-backend.sh",
+      "dest": ".har/stages/flag-cleanup-reads-backend.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flag-cleanup-reads-frontend.sh",
+      "dest": ".har/stages/flag-cleanup-reads-frontend.sh",
+      "executable": true
+    },
+    {
+      "src": "stages/flag-cleanup-registration-absent.sh",
+      "dest": ".har/stages/flag-cleanup-registration-absent.sh",
+      "executable": true
+    }
+  ],
+  "stages": [
+    {
+      "id": "flag-cleanup-not-permanent",
+      "kind": "test",
+      "description": "flag-cleanup line: HAR_FLAG is not a permanent.py entitlement (warns on default=True) — never on verify",
+      "script": "stages/flag-cleanup-not-permanent.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {"path": ".har/artifacts/flag-cleanup-not-permanent", "kind": "directory"}
+      ],
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-reads-backend",
+      "kind": "test",
+      "description": "flag-cleanup line: no read of HAR_FLAG left in src/ or tests/ — never on verify",
+      "script": "stages/flag-cleanup-reads-backend.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {"path": ".har/artifacts/flag-cleanup-reads-backend", "kind": "directory"}
+      ],
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-reads-frontend",
+      "kind": "test",
+      "description": "flag-cleanup line: no read of the flag's short name left in static/ — never on verify",
+      "script": "stages/flag-cleanup-reads-frontend.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {"path": ".har/artifacts/flag-cleanup-reads-frontend", "kind": "directory"}
+      ],
+      "tier": "full"
+    },
+    {
+      "id": "flag-cleanup-registration-absent",
+      "kind": "test",
+      "description": "flag-cleanup line: HAR_FLAG appears nowhere in the repo — never on verify",
+      "script": "stages/flag-cleanup-registration-absent.sh",
+      "requiresAgentId": true,
+      "artifacts": [
+        {"path": ".har/artifacts/flag-cleanup-registration-absent", "kind": "directory"}
+      ],
+      "tier": "full"
+    }
+  ],
+  "nextSteps": [
+    "har line status flag-cleanup",
+    "HAR_FLAG=organizations:<name> har line gate S0 --line flag-cleanup --agent <slot>"
+  ],
+  "docsPath": ".har/lines/flag-cleanup/README.md"
+}
