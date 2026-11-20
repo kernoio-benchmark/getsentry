@@ -298,10 +298,7 @@ function builtInIssuesFields({
       name: 'Issue Type',
       values: [
         ...VISIBLE_ISSUE_TYPES,
-        ...(organization.features.includes('ai-issue-detection') &&
-        !organization.hideAiFeatures
-          ? [...AI_DETECTED_ISSUE_TYPES]
-          : []),
+        ...(organization.hideAiFeatures ? [] : [...AI_DETECTED_ISSUE_TYPES]),
       ].map(value => ({
         icon: null,
         title: value,

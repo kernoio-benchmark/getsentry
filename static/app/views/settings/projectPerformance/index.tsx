@@ -65,9 +65,7 @@ export function ProjectPerformance() {
   } = useDetailedProject({projectSlug, orgSlug: organization.slug});
 
   const hasWebVitalsSeerSuggestions = useHasSeerWebVitalsSuggestions(project);
-  const hasAIIssueDetection =
-    organization.features.includes('ai-issue-detection') &&
-    areAiFeaturesAllowed(organization);
+  const hasAIIssueDetection = areAiFeaturesAllowed(organization);
 
   // Apdex and User Misery thresholds only apply to the transactions dataset.
   const hasThresholdSettings = !useInsightsEap();
